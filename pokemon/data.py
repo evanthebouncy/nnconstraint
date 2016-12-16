@@ -3,6 +3,7 @@ from draw import *
 
 K = 10
 L = 20
+n_batch = 50
 
 # ------------------------------------------------------------------ helpers
 
@@ -69,7 +70,7 @@ def gen_X(Z, ll = L):
 #    query_TF: the TF for that particular new query
 #    z_loc: the location for the hidden state Z
 # all variables are a list of tensors of dimention [n_batch x ...]   
-def gen_data(n_batch = 50, K=K):
+def gen_data(n_batch = n_batch, K=K):
   # LIST of length K (1 for each input)
   # each element of shape [batch x loc]
   k_locs = [[] for i in range(K)]

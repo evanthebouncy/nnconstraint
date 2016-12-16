@@ -17,50 +17,131 @@ def max_pool_2x2(x):
   return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],
                         strides=[1, 2, 2, 1], padding='SAME')
 
+# set up weights for input outputs!
+in_k_locs = [tf.placeholder(tf.float32, [n_batch, L, L, 1]) for _ in range(K)]
+in_k_TFs = [tf.placeholder(tf.float32, [n_batch, 2]) for _ in range(K)]
+in_k_weights = tf.placeholder(tf.float32, [n_batch, K])
+in_query_loc = tf.placeholder(tf.float32, [n_batch, L, L, 1])
+out_query_TF = tf.placeholder(tf.float32, [n_batch, 2])
+out_z_loc = tf.placeholder(tf.float32, [n_batch, L, L, 1])
 
-x = tf.placeholder(tf.float32, [None, L, L, 1])
-y_true = tf.placeholder(tf.float32, [None, 2])
+def gen_feed_dict(k_locs, k_TFs, k_weights, query_loc, query_TF, z_loc):
+  ret = {}
+  for a, b in zip(in_k_locs, k_locs):
+    ret[a] = b
+  for a, b in zip(in_k_TFs, k_TFs):
+    ret[a] = b
+  ret[in_k_weights] = k_weights
+  ret[in_query_loc] = query_loc
+  ret[out_query_TF] = query_TF
+  ret[out_z_loc] = z_loc
+  return ret
 
 
-W_conv1 = weight_variable([5, 5, 1, 32])
-b_conv1 = bias_variable([32])
+# --------------------------------------------------------------------------- embed observations
+W_conv1 = weight_variable([5, 5, 1, 8])
+b_conv1 = bias_variable([8])
 
-h_conv1 = tf.nn.relu(conv2d(x, W_conv1) + b_conv1)
-h_pool1 = max_pool_2x2(h_conv1)
+h_conv1s = [tf.nn.relu(conv2d(x, W_conv1) + b_conv1) for x in in_k_locs]
+h_pool1s = [max_pool_2x2(h_conv1) for h_conv1 in h_conv1s]
 
-print h_conv1.get_shape()
-print h_pool1.get_shape()
 
-W_conv2 = weight_variable([5, 5, 32, 32])
-b_conv2 = bias_variable([32])
+print show_dim(h_conv1s)
+print show_dim(h_pool1s)
 
-h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
-h_pool2 = max_pool_2x2(h_conv2)
+W_conv2 = weight_variable([5, 5, 8, 8])
+b_conv2 = bias_variable([8])
 
-W_fc1 = weight_variable([5 * 5 * 32, 512])
-b_fc1 = bias_variable([512])
+h_conv2s = [tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2) for h_pool1 in h_pool1s]
+h_pool2s = [max_pool_2x2(h_conv2) for h_conv2 in h_conv2s]
 
-h_pool2_flat = tf.reshape(h_pool2, [-1, 5*5*32])
-h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+W_fc1 = weight_variable([5 * 5 * 8, 64])
+b_fc1 = bias_variable([64])
 
-keep_prob = tf.placeholder(tf.float32)
-h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+h_pool2_flats = [tf.reshape(h_pool2, [-1, 5*5*8]) for h_pool2 in h_pool2s]
+h_fc1s = [tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1) for h_pool2_flat in h_pool2_flats]
 
-W_fc2 = weight_variable([512, 2])
-b_fc2 = bias_variable([2])
+print show_dim(h_fc1s)
+# keep_prob = tf.placeholder(tf.float32)
+# h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
-y_conv=tf.nn.softmax(tf.matmul(h_fc1_drop, W_fc2) + b_fc2)
+# concat the convolved input query with the input TF value for that query, and pass is through
+# another RELU layer
+fc1_with_labs = [tf.concat(1, xx) for xx in zip(h_fc1s, in_k_TFs)]
+print show_dim(fc1_with_labs)
 
-print y_conv.get_shape()
+W_fc2 = weight_variable([66, 48])
+b_fc2 = bias_variable([48])
 
-# Minimize the mean squared errors.
-loss = tf.reduce_mean(tf.square(y_conv - y_true))
-# loss = tf.reduce_mean(-tf.reduce_sum(y_true * tf.log(y_conv), reduction_indices=[1]))
-# loss = -tf.reduce_sum(y_true * tf.log(tf.clip_by_value(y_conv,1e-10,1.0)))
+obs_embeds = [tf.nn.relu(tf.matmul(fc1_with_lab, W_fc2) + b_fc2) for\
+                  fc1_with_lab in fc1_with_labs]
+print show_dim(obs_embeds)
 
+# unpack the weights
+unpacked_w = tf.unpack(in_k_weights, axis=1)
+# reshape it to match the embedded thing for each input
+unpacked_w = [tf.reshape(tf.tile(ww, [48]), [n_batch, 48]) for ww in unpacked_w]
+print type(unpacked_w)
+print show_dim(unpacked_w)
+zippp = zip(unpacked_w, obs_embeds)
+# weigh each embeding
+weighted_embs = [x[0] * x[1] for x in zippp]
+# sum the embedings together
+obs_embed = sum(weighted_embs)
+print show_dim(obs_embed)
+
+# ----------------------------------------------------------------------------- readin query
+# use shared weights from the first layer of the observation embedding
+query_conv1 = tf.nn.relu(conv2d(in_query_loc, W_conv1) + b_conv1)
+query_pool1 = max_pool_2x2(query_conv1)
+
+
+# print show_dim(h_conv1s)
+# print show_dim(h_pool1s)
+
+query_conv2 = tf.nn.relu(conv2d(query_pool1, W_conv2) + b_conv2)
+query_pool2 = max_pool_2x2(query_conv2)
+
+query_pool2_flat = tf.reshape(query_pool2, [-1, 5*5*8])
+query_emb = tf.nn.relu(tf.matmul(query_pool2_flat, W_fc1) + b_fc1)
+
+print show_dim(query_emb)
+
+# ------------------------------------------------------------------- make the query inference
+# first we concatenate the query_emb with the obs_emb
+conc_q_obs = tf.concat(1, [query_emb, obs_embed])
+print show_dim(conc_q_obs)
+W_q_infer = weight_variable([112, 2])
+b_q_infer = bias_variable([2])
+
+pred_lab = tf.nn.softmax(tf.matmul(conc_q_obs, W_q_infer) + b_q_infer) 
+print show_dim(pred_lab)
+
+# ------------------------------------------------------------------ make the z inference (lata)
+# 
+
+# ------------------------------------------------------------------------ training steps
+# Minimize the mean squared errors (for the query inference)
+loss = tf.reduce_mean(tf.square(pred_lab - out_query_TF))
 
 optimizer = tf.train.GradientDescentOptimizer(0.01)
 train = optimizer.minimize(loss)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------- running !
 
 # Before starting, initialize the variables.  We will 'run' this first.
 init = tf.initialize_all_variables()
@@ -69,24 +150,25 @@ init = tf.initialize_all_variables()
 sess = tf.Session()
 sess.run(init)
 
-# dat, lab = gen_data()
-# print sess.run([loss], feed_dict={x: dat, y_true: lab, keep_prob: 1.0})
-# print sess.run([y_conv], feed_dict={x: dat, y_true: lab, keep_prob: 1.0})
-# sess.run([train, loss], feed_dict={x: dat, y_true: lab, keep_prob: 0.5})
-# print sess.run([loss], feed_dict={x: dat, y_true: lab, keep_prob: 1.0})
+k_locs, k_TFs, k_weights, query_loc, query_TF, z_loc = gen_data(n_batch)
+feed_dic = gen_feed_dict(k_locs, k_TFs, k_weights, query_loc, query_TF, z_loc)
+print sess.run([loss], feed_dict=feed_dic)
+sess.run([train], feed_dict=feed_dic)
+print sess.run([loss], feed_dict=feed_dic)
 # print sess.run([y_conv], feed_dict={x: dat, y_true: lab, keep_prob: 1.0})
 
 for i in range(5000001):
-  # get data dynamically from my data generator
-  dat, lab = gen_data()
-  sess.run(train, feed_dict={x: dat, y_true: lab, keep_prob: 0.5})
-  print sess.run(loss, feed_dict={x: dat, y_true: lab, keep_prob: 1.0})
+  k_locs, k_TFs, k_weights, query_loc, query_TF, z_loc = gen_data(n_batch)
+  feed_dic = gen_feed_dict(k_locs, k_TFs, k_weights, query_loc, query_TF, z_loc)
+  print sess.run([loss], feed_dict=feed_dic)
+  sess.run([train], feed_dict=feed_dic)
+  print sess.run([loss], feed_dict=feed_dic)
   
   # do evaluation every 100 epochs
   if (i % 100 == 0):
-    print("====current accuracy==== at epoch ", i)
-    pred_y = sess.run([y_conv], feed_dict={x:dat, keep_prob:1.0})
-    for ppp, ooo in zip(list(pred_y[0]), list(lab)):
+    print "evaluating on some samples ... "
+    pred_y = sess.run([pred_lab], feed_dict=feed_dic)
+    for ppp, ooo in zip(list(pred_y[0]), list(query_TF)):
       print ppp, ooo, 
       ppp = [1.0, 0.0] if ppp[0] > ppp[1] else [0.0, 1.0]
       ooo = list(ooo)
