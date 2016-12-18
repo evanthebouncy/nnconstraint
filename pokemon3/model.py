@@ -37,13 +37,13 @@ def gen_feed_dict(k_locs, k_weights, query_loc, query_TF, z_loc):
   ret[in_query_loc] = query_loc
   ret[out_query_TF] = query_TF
   ret[out_z_loc] = z_loc
-  ret[keep_prob] = 0.9
+  ret[keep_prob] = 0.7
   return ret
 
 
 # --------------------------------------------------------------------- initial hidden state Z
 # set up weights for input outputs!
-Z_hidden = tf.Variable(tf.truncated_normal([1, L, L, 8], stddev=0.1))
+Z_hidden = tf.Variable(tf.truncated_normal([1, L, L, 2], stddev=0.1))
 print "initial hidden dim ", show_dim(Z_hidden)
 # Z_hidden_tile = tf.tile(Z_hidden, [n_batch]), [n_batch, 64]) for ww in unpacked_w]
 Z_hidden_tile = tf.tile(Z_hidden, [n_batch, 1, 1, 1])
@@ -52,10 +52,8 @@ print "tiled hidden dim ", show_dim(Z_hidden_tile)
 # --------------------------------------------------------------------- convolve in the observations
 
 # initialize some weights
-W_conv1 = weight_variable([5, 5, 10, 20])
-b_conv1 = bias_variable([20])
-W_conv2 = weight_variable([5, 5, 20, 8])
-b_conv2 = bias_variable([8])
+W_conv1 = weight_variable([15, 15, 4, 2])
+b_conv1 = bias_variable([2])
 
 Z_hiddens = []
 hidden_rollin = Z_hidden_tile
@@ -68,9 +66,7 @@ for i in range(K):
   print "concat dim of hidden and input ", show_dim(hidden_cat_input)
   # convolve them into the new hidden representation 
   h_conv1 = tf.nn.relu(conv2d(hidden_cat_input, W_conv1) + b_conv1)
-  h_conv2 = tf.nn.relu(conv2d(h_conv1, W_conv2) + b_conv2)
-
-  h_conv2 = tf.nn.dropout(h_conv2, keep_prob)
+  h_conv2 = tf.nn.dropout(h_conv1, keep_prob)
 
   hidden_rollin = h_conv2
   Z_hiddens.append(hidden_rollin)
@@ -81,7 +77,7 @@ for i in range(K):
 # unpack the weights
 unpacked_w = tf.unpack(in_k_weights, axis=1)
 # reshape it to match the dim for the hidden_volvos
-unpacked_w = [tf.reshape(tf.tile(ww, [L * L * 8]), [n_batch, L, L, 8]) for ww in unpacked_w]
+unpacked_w = [tf.reshape(tf.tile(ww, [L * L * 2]), [n_batch, L, L, 2]) for ww in unpacked_w]
 print "dim umpacked weights ", show_dim(unpacked_w)
 zippp = zip(unpacked_w, Z_hiddens)
 # weigh each hidden volvo
@@ -92,21 +88,26 @@ print "last volvo dim ", show_dim(last_volvo)
 
 # ----------------------------------------------------------------------- recover Z from last_volvo
 # get some new weights making the inference
-W_conv1_z = weight_variable([5, 5, 8, 8])
-b_conv1_z = bias_variable([8])
-
-W_conv2_z = weight_variable([5, 5, 8, 1])
-b_conv2_z = bias_variable([1])
+W_conv1_z = weight_variable([15, 15, 2, 1])
+b_conv1_z = bias_variable([1])
 
 z_conv1 = tf.nn.relu(conv2d(last_volvo, W_conv1_z) + b_conv1_z)
-z_conv2 = tf.nn.relu(conv2d(z_conv1, W_conv2_z) + b_conv2_z)
+
+print "conv 1 shape ", show_dim(z_conv1)
+
+# z_pred = z_conv1 / norm_sum_tiled
+z_pred = z_conv1
 
 # ------------------------------------------------------------------------ training steps
 # Minimize the mean squared errors (for the query inference)
-costt = tf.reduce_mean(tf.square(z_conv2 - out_z_loc))
-optimizer = tf.train.RMSPropOptimizer(0.01)
-train = optimizer.minimize(costt)
+costt = tf.reduce_mean(tf.square(z_pred - out_z_loc))
+# optimizer = tf.train.RMSPropOptimizer(0.001)
+# train = optimizer.minimize(costt)
 
+tvars = tf.trainable_variables()
+grads = [tf.clip_by_value(grad, -1., 1.) for grad in tf.gradients(costt, tvars)]
+optimizer = tf.train.RMSPropOptimizer(0.0001)
+train = optimizer.apply_gradients(zip(grads, tvars))
 
 '''
 # ------------------------------------------------------------------- make the query inference
@@ -172,8 +173,9 @@ for i in range(5000001):
   
   # do evaluation every 100 epochs
   if (i % 10 == 0):
-    out_pred = sess.run(z_conv2, feed_dict=feed_dic)
-    draw(out_pred[0])
-    draw(z_loc[0])
+    out_pred = sess.run(z_pred, feed_dict=feed_dic)
+    # print "total sum ? ", np.sum(out_pred[0]), " ", np.sum(z_loc[0])
+    draw(out_pred[0], "pred.png")
+    draw(z_loc[0], "truth.png")
 
 

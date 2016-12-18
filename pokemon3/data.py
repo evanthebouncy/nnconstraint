@@ -29,7 +29,30 @@ def coord_2_loc(coord, ll = L):
     for j in range(ll):
       grid_coord_i = i + 0.5
       grid_coord_j = j + 0.5
-      ret[i][j][0] = np.exp(-dist((grid_coord_i, grid_coord_j), coord))
+      ret[i][j][0] = np.exp(-dist((grid_coord_i, grid_coord_j), coord) / 4.0)
+
+  # ssums = ret.sum()
+  # ret = ret / ssums
+  return ret
+
+def consistent_z(obs, ll = L):
+  def consistent(z_pt, obs):
+    for ob_pt, ob_pred in obs:
+      if dist(z_pt, ob_pt) > ll / 2.0 and ob_pred:
+        return False
+      if dist(z_pt, ob_pt) < ll / 2.0 and not ob_pred:
+        return False
+    return True
+      
+  ret = np.zeros([ll, ll, 1])
+  for i in range(ll):
+    for j in range(ll):
+      grid_coord_i = i + 0.5
+      grid_coord_j = j + 0.5
+      ret[i][j][0] = 1.0 if consistent((grid_coord_i, grid_coord_j), obs) else 0.0
+
+  ssums = ret.sum()
+  ret = ret / (ssums + 0.001)
   return ret
 
 def coord_2_loc_obs(coord, label, ll = L):
@@ -58,14 +81,14 @@ def show_dim(lst1):
 # --------------------------------------------------------------- modelings
 # generate the hidden state
 def gen_Z(ll = L):
-  x_coord = np.random.random() * ll
-  y_coord = np.random.random() * ll
+  x_coord = np.random.random() * (ll - 4.0) + 2.0
+  y_coord = np.random.random() * (ll - 4.0) + 2.0
   return x_coord, y_coord
 
 def gen_X(Z, ll = L):
   ll = float(ll)
-  Xx = np.random.random() * ll
-  Xy = np.random.random() * ll
+  Xx = np.random.random() * (ll - 4.0) + 2.0
+  Xy = np.random.random() * (ll - 4.0) + 2.0
   X = (Xx, Xy)
   if dist(Z,X) < ll / 2.0:
     return X, [1.0, 0.0]
@@ -97,31 +120,35 @@ def gen_data(n_batch = n_batch, K=K):
     # generate a hidden variable Z for each batch
     Z_coord = gen_Z()
     _z_loc = coord_2_loc(Z_coord)
-    z_loc.append(_z_loc)
     # generate and add query location
     _query_coord, _query_TF = gen_X(Z_coord)
     _query_loc = coord_2_loc(_query_coord)
     query_loc.append(_query_loc)
     query_TF.append(_query_TF)
     # for each batch, decide how many sample observations we want to draw
-    k = np.random.randint(1,K)
+    k = 10
     # then re-weight each input layer by the appropriate weight
     _k_weights = [0.0 for _ in range(K)]
-    for _ in range(k):
-      _k_weights[_] = 1.0 / k
+    for haha in range(k):
+      _k_weights[haha] = 1.0
     k_weights.append(_k_weights)
+
+    obsss = []
 
     # for easier padding and such, generate these for each batch then mush them in
     # only the list of tensors need this treatment, otherwise just batch them in ok
     b_k_locs = []
     for _ in range(k):
       obs_x, obs_lab = gen_X(Z_coord)
+      obsss.append((obs_x, obs_lab))
       obs_x_loc = coord_2_loc_obs(obs_x, obs_lab)
       b_k_locs.append(obs_x_loc)
 
     b_k_locs = pad_and_numpy(b_k_locs, K) 
     for kkk in range(K):
       k_locs[kkk].append(b_k_locs[kkk]) 
+
+    z_loc.append(_z_loc)
 
   return k_locs, \
          np.array(k_weights, np.float32), \
